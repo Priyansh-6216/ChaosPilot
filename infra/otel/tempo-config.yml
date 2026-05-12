@@ -1,0 +1,44 @@
+server:
+  http_listen_port: 3200
+
+distributor:
+  ring:
+    kvstore:
+      store: inmemory
+
+ingester:
+  trace_idle_period: 10s
+  trace_force_flush_period: 10s
+  lifecycler:
+    ring:
+      kvstore:
+        store: inmemory
+      replication_factor: 1
+
+metrics_generator:
+  processor:
+    batch:
+      timeout: 5s
+      send_batch_size: 1000
+    service_graphs:
+      store: inmemory
+
+storage:
+  trace:
+    backend: local
+    wal:
+      path: /var/tempo/wal
+    local:
+      path: /var/tempo/blocks
+    cache: memcache
+memcache:
+  consistent_hash:
+    addresses:
+      - memcache:11211
+
+querier:
+  frontend_worker:
+    frontend_address: querier-frontend:9095
+
+usage_report:
+  enabled: false

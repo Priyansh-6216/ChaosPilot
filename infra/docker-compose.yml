@@ -1,0 +1,398 @@
+version: '3.8'
+
+services:
+  # Databases
+  postgres:
+    image: postgres:15-alpine
+    container_name: chaospilot-postgres
+    environment:
+      POSTGRES_DB: chaospilot
+      POSTGRES_USER: chaospilot
+      POSTGRES_PASSWORD: chaospilot123
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./infra/db-init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U chaospilot"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - chaospilot-network
+
+  redis:
+    image: redis:7-alpine
+    container_name: chaospilot-redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - chaospilot-network
+
+  # Message Queue
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.5.0
+    container_name: chaospilot-zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_SYNC_LIMIT: 2
+      ZOOKEEPER_INIT_LIMIT: 5
+    ports:
+      - "2181:2181"
+    networks:
+      - chaospilot-network
+
+  kafka:
+    image: confluentinc/cp-kafka:7.5.0
+    container_name: chaospilot-kafka
+    depends_on:
+      - zookeeper
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://kafka:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: 'true'
+    ports:
+      - "9092:9092"
+    healthcheck:
+      test: ["CMD-SHELL", "kafka-broker-api-versions --bootstrap-server localhost:9092"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - chaospilot-network
+
+  # Observability Stack
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: chaospilot-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./infra/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+    networks:
+      - chaospilot-network
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: chaospilot-grafana
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_SECURITY_ADMIN_USER: admin
+    volumes:
+      - grafana_data:/var/lib/grafana
+    depends_on:
+      - prometheus
+    networks:
+      - chaospilot-network
+
+  loki:
+    image: grafana/loki:latest
+    container_name: chaospilot-loki
+    ports:
+      - "3100:3100"
+    volumes:
+      - ./infra/otel/loki-config.yml:/etc/loki/local-config.yml
+      - loki_data:/loki
+    command: -config.file=/etc/loki/local-config.yml
+    networks:
+      - chaospilot-network
+
+  tempo:
+    image: grafana/tempo:latest
+    container_name: chaospilot-tempo
+    command: [ "-config.file=/etc/tempo.yml" ]
+    volumes:
+      - ./infra/otel/tempo-config.yml:/etc/tempo.yml
+      - tempo_data:/var/tempo
+    ports:
+      - "3200:3200"
+      - "4317:4317"
+      - "4318:4318"
+    networks:
+      - chaospilot-network
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:latest
+    container_name: chaospilot-otel-collector
+    command: ["--config=/etc/otel-collector-config.yml"]
+    volumes:
+      - ./infra/otel/otel-collector-config.yml:/etc/otel-collector-config.yml
+    ports:
+      - "4317:4317"
+      - "4318:4318"
+      - "9411:9411"
+    depends_on:
+      - tempo
+      - loki
+      - prometheus
+    networks:
+      - chaospilot-network
+
+  # Core Chaos Platform Services
+  chaos-gateway:
+    build:
+      context: ./backend/chaos-gateway
+      dockerfile: Dockerfile
+    container_name: chaospilot-gateway
+    ports:
+      - "8080:8080"
+    environment:
+      SPRING_APPLICATION_NAME: chaos-gateway
+      SERVER_PORT: 8080
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/chaospilot
+      SPRING_DATASOURCE_USERNAME: chaospilot
+      SPRING_DATASOURCE_PASSWORD: chaospilot123
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      SPRING_REDIS_HOST: redis
+      SPRING_REDIS_PORT: 6379
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+      OTEL_EXPORTER_OTLP_PROTOCOL: grpc
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - chaospilot-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  chaos-orchestrator:
+    build:
+      context: ./backend/chaos-orchestrator
+      dockerfile: Dockerfile
+    container_name: chaospilot-orchestrator
+    ports:
+      - "8082:8082"
+    environment:
+      SPRING_APPLICATION_NAME: chaos-orchestrator
+      SERVER_PORT: 8082
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/chaospilot
+      SPRING_DATASOURCE_USERNAME: chaospilot
+      SPRING_DATASOURCE_PASSWORD: chaospilot123
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      SPRING_REDIS_HOST: redis
+      SPRING_REDIS_PORT: 6379
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+      OTEL_EXPORTER_OTLP_PROTOCOL: grpc
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    networks:
+      - chaospilot-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8082/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  experiment-service:
+    build:
+      context: ./backend/experiment-service
+      dockerfile: Dockerfile
+    container_name: chaospilot-experiment
+    ports:
+      - "8081:8081"
+    environment:
+      SPRING_APPLICATION_NAME: experiment-service
+      SERVER_PORT: 8081
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/chaospilot
+      SPRING_DATASOURCE_USERNAME: chaospilot
+      SPRING_DATASOURCE_PASSWORD: chaospilot123
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      SPRING_REDIS_HOST: redis
+      SPRING_REDIS_PORT: 6379
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+      OTEL_EXPORTER_OTLP_PROTOCOL: grpc
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    networks:
+      - chaospilot-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8081/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # Demo Business Services
+  order-service:
+    build:
+      context: ./demo-services/order-service
+      dockerfile: Dockerfile
+    container_name: chaospilot-order
+    ports:
+      - "8083:8083"
+    environment:
+      SPRING_APPLICATION_NAME: order-service
+      SERVER_PORT: 8083
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/chaospilot
+      SPRING_DATASOURCE_USERNAME: chaospilot
+      SPRING_DATASOURCE_PASSWORD: chaospilot123
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      SPRING_REDIS_HOST: redis
+      SPRING_REDIS_PORT: 6379
+      PAYMENT_SERVICE_URL: http://payment-service:8084
+      INVENTORY_SERVICE_URL: http://inventory-service:8085
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+      OTEL_EXPORTER_OTLP_PROTOCOL: grpc
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - chaospilot-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8083/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  payment-service:
+    build:
+      context: ./demo-services/payment-service
+      dockerfile: Dockerfile
+    container_name: chaospilot-payment
+    ports:
+      - "8084:8084"
+    environment:
+      SPRING_APPLICATION_NAME: payment-service
+      SERVER_PORT: 8084
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/chaospilot
+      SPRING_DATASOURCE_USERNAME: chaospilot
+      SPRING_DATASOURCE_PASSWORD: chaospilot123
+      SPRING_REDIS_HOST: redis
+      SPRING_REDIS_PORT: 6379
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+      OTEL_EXPORTER_OTLP_PROTOCOL: grpc
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - chaospilot-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8084/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  inventory-service:
+    build:
+      context: ./demo-services/inventory-service
+      dockerfile: Dockerfile
+    container_name: chaospilot-inventory
+    ports:
+      - "8085:8085"
+    environment:
+      SPRING_APPLICATION_NAME: inventory-service
+      SERVER_PORT: 8085
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/chaospilot
+      SPRING_DATASOURCE_USERNAME: chaospilot
+      SPRING_DATASOURCE_PASSWORD: chaospilot123
+      SPRING_REDIS_HOST: redis
+      SPRING_REDIS_PORT: 6379
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+      OTEL_EXPORTER_OTLP_PROTOCOL: grpc
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - chaospilot-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8085/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  user-service:
+    build:
+      context: ./demo-services/user-service
+      dockerfile: Dockerfile
+    container_name: chaospilot-user
+    ports:
+      - "8086:8086"
+    environment:
+      SPRING_APPLICATION_NAME: user-service
+      SERVER_PORT: 8086
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/chaospilot
+      SPRING_DATASOURCE_USERNAME: chaospilot
+      SPRING_DATASOURCE_PASSWORD: chaospilot123
+      SPRING_REDIS_HOST: redis
+      SPRING_REDIS_PORT: 6379
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+      OTEL_EXPORTER_OTLP_PROTOCOL: grpc
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - chaospilot-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8086/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # Notification Service
+  notification-service:
+    build:
+      context: ./backend/notification-service
+      dockerfile: Dockerfile
+    container_name: chaospilot-notification
+    ports:
+      - "8087:8087"
+    environment:
+      SPRING_APPLICATION_NAME: notification-service
+      SERVER_PORT: 8087
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/chaospilot
+      SPRING_DATASOURCE_USERNAME: chaospilot
+      SPRING_DATASOURCE_PASSWORD: chaospilot123
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+      OTEL_EXPORTER_OTLP_PROTOCOL: grpc
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    networks:
+      - chaospilot-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8087/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  postgres_data:
+  prometheus_data:
+  grafana_data:
+  loki_data:
+  tempo_data:
+
+networks:
+  chaospilot-network:
+    driver: bridge

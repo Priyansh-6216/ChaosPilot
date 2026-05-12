@@ -1,0 +1,48 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+  - job_name: 'chaos-gateway'
+    static_configs:
+      - targets: ['chaos-gateway:8080']
+    metrics_path: '/actuator/prometheus'
+
+  - job_name: 'chaos-orchestrator'
+    static_configs:
+      - targets: ['chaos-orchestrator:8082']
+    metrics_path: '/actuator/prometheus'
+
+  - job_name: 'experiment-service'
+    static_configs:
+      - targets: ['experiment-service:8081']
+    metrics_path: '/actuator/prometheus'
+
+  - job_name: 'order-service'
+    static_configs:
+      - targets: ['order-service:8083']
+    metrics_path: '/actuator/prometheus'
+
+  - job_name: 'payment-service'
+    static_configs:
+      - targets: ['payment-service:8084']
+    metrics_path: '/actuator/prometheus'
+
+  - job_name: 'inventory-service'
+    static_configs:
+      - targets: ['inventory-service:8085']
+    metrics_path: '/actuator/prometheus'
+
+  - job_name: 'user-service'
+    static_configs:
+      - targets: ['user-service:8086']
+    metrics_path: '/actuator/prometheus'
+
+  - job_name: 'notification-service'
+    static_configs:
+      - targets: ['notification-service:8087']
+    metrics_path: '/actuator/prometheus'

@@ -1,0 +1,32 @@
+spring:
+  application:
+    name: metrics-collector
+  datasource:
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/chaospilot}
+    username: ${SPRING_DATASOURCE_USERNAME:chaospilot}
+    password: ${SPRING_DATASOURCE_PASSWORD:chaospilot123}
+    driver-class-name: org.postgresql.Driver
+  jpa:
+    hibernate:
+      ddl-auto: update
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+
+server:
+  port: 8089
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,metrics,prometheus
+  metrics:
+    export:
+      prometheus:
+        enabled: true
+
+logging:
+  level:
+    root: INFO
+    com.chaospilot: DEBUG
