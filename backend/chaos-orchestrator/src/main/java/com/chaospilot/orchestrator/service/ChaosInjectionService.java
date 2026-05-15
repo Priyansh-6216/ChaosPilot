@@ -56,7 +56,8 @@ public class ChaosInjectionService {
                         .block(Duration.ofSeconds(10));
             } else {
                 log.info("Triggering timeout fault for {}", event.getTargetService());
-                webClient.post()
+                webClientBuilder.build()
+                        .post()
                         .uri(baseUrl + "/internal/chaos/timeout")
                         .bodyValue(Map.of("enabled", true))
                         .retrieve()
