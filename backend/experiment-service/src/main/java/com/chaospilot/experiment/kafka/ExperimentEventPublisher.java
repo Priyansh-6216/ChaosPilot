@@ -27,6 +27,10 @@ public class ExperimentEventPublisher {
         publish("experiment.stopped", event);
     }
 
+    public void publishExperimentCompleted(ExperimentEvent event) {
+        publish("experiment.completed", event);
+    }
+
     public void publishChaosInjectionRequested(ChaosInjectionRequest request) {
         publish("chaos.injection.requested", request);
     }

@@ -90,7 +90,9 @@ public class ExperimentService {
         experiment.setEndedAt(LocalDateTime.now());
         repository.save(experiment);
 
-        publisher.publishExperimentStopped(buildEvent(experiment, "experiment.stopped"));
+        ExperimentEvent stoppedEvent = buildEvent(experiment, "experiment.stopped");
+        publisher.publishExperimentStopped(stoppedEvent);
+        publisher.publishExperimentCompleted(buildEvent(experiment, "experiment.completed"));
         return toResponse(experiment);
     }
 

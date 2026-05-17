@@ -386,6 +386,33 @@ services:
       timeout: 5s
       retries: 3
 
+  rca-worker:
+    build:
+      context: ../ai-worker/rca-worker
+      dockerfile: Dockerfile
+    container_name: chaospilot-rca-worker
+    ports:
+      - "8088:8088"
+    environment:
+      DATABASE_URL: postgresql://chaospilot:chaospilot123@postgres:5432/chaospilot
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      KAFKA_TOPIC: experiment.completed
+      KAFKA_GROUP_ID: rca-worker-group
+      OLLAMA_MODEL: llama2
+      USE_OLLAMA: "false"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    networks:
+      - chaospilot-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8088/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
 volumes:
   postgres_data:
   prometheus_data:
