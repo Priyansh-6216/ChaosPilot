@@ -60,6 +60,13 @@
             <groupId>io.micrometer</groupId>
             <artifactId>micrometer-registry-prometheus</artifactId>
         </dependency>
+
+        <!-- JSONB mapping -->
+        <dependency>
+            <groupId>com.vladmihalcea</groupId>
+            <artifactId>hibernate-types-52</artifactId>
+            <version>2.20.0</version>
+        </dependency>
     </dependencies>
 
     <build>
